@@ -236,6 +236,10 @@ async function initDB() {
   `);
   console.log('[db] auth tables ready');
 
+  // Initialise MySQL session store now that DB pool is ready
+  sessionStore = makeMySQLStore(db);
+  console.log('[db] MySQL session store ready');
+
   console.log('[db] MySQL session store ready');
 
   // Create default admin if no users exist
@@ -925,66 +929,81 @@ app.set('trust proxy', 1);
 // false = allow HTTP (for direct local access without proxy)
 const SECURE_COOKIES = process.env.NODE_ENV === 'production';
 
-// MySQL session store — dedicated pool, initialised at startup
-// Sessions stored in DB survive service restarts and deploys
+// MySQL-backed session store — sessions survive restarts and deploys
+// Uses the main db pool (passed in after initDB runs)
+function makeMySQLStore(db) {
+  const Store = session.Store;
+  function fmtDate(ms) {
+    return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+  }
+  function expiry(data) {
+    return data && data.cookie && data.cookie.expires
+      ? new Date(data.cookie.expires).getTime()
+      : Date.now() + SESSION_MAX_AGE;
+  }
 
-const _SessionStore = session.Store;
-class MySQLSessionStore extends _SessionStore {
-  constructor() {
-    super();
-    setInterval(() => this._clearExpired(), 15 * 60 * 1000);
-  }
-  _fmt(ms) { return new Date(ms).toISOString().slice(0,19).replace('T',' '); }
-  _clearExpired() {
-    pool.execute('DELETE FROM sessions WHERE expires < NOW()').catch(()=>{});
-  }
-  get(sid, cb) {
-    pool.execute(
-      'SELECT data FROM sessions WHERE session_id=? AND expires>NOW()', [sid]
-    ).then(([rows]) => {
-      if (!rows.length) return cb(null, null);
-      try { cb(null, JSON.parse(rows[0].data)); } catch(e) { cb(null, null); }
-    }).catch(e => cb(e));
-  }
-  set(sid, data, cb) {
-    const exp = this._fmt(
-      data?.cookie?.expires ? new Date(data.cookie.expires).getTime() : Date.now() + SESSION_MAX_AGE
-    );
-    pool.execute(
-      `INSERT INTO sessions (session_id, expires, data) VALUES (?,?,?)
-       ON DUPLICATE KEY UPDATE expires=VALUES(expires), data=VALUES(data)`,
+  function MySQLStore() { Store.call(this); }
+  require('util').inherits(MySQLStore, Store);
+
+  MySQLStore.prototype.get = function(sid, cb) {
+    db.execute('SELECT data FROM sessions WHERE session_id=? AND expires>NOW()', [sid])
+      .then(function([rows]) {
+        if (!rows || !rows.length) return cb(null, null);
+        try { cb(null, JSON.parse(rows[0].data)); } catch(e) { cb(null, null); }
+      })
+      .catch(function(e) { cb(e); });
+  };
+
+  MySQLStore.prototype.set = function(sid, data, cb) {
+    var exp = fmtDate(expiry(data));
+    db.execute(
+      'INSERT INTO sessions (session_id, expires, data) VALUES (?,?,?) ' +
+      'ON DUPLICATE KEY UPDATE expires=VALUES(expires), data=VALUES(data)',
       [sid, exp, JSON.stringify(data)]
-    ).then(() => cb(null)).catch(e => cb(e));
-  }
-  destroy(sid, cb) {
-    pool.execute('DELETE FROM sessions WHERE session_id=?', [sid])
-      .then(() => cb(null)).catch(e => cb(e));
-  }
-  touch(sid, data, cb) {
-    const exp = this._fmt(
-      data?.cookie?.expires ? new Date(data.cookie.expires).getTime() : Date.now() + SESSION_MAX_AGE
-    );
-    pool.execute(
-      'UPDATE sessions SET expires=? WHERE session_id=?', [exp, sid]
-    ).then(() => cb(null)).catch(e => cb(e));
-  }
+    ).then(function() { cb(null); }).catch(function(e) { cb(e); });
+  };
+
+  MySQLStore.prototype.destroy = function(sid, cb) {
+    db.execute('DELETE FROM sessions WHERE session_id=?', [sid])
+      .then(function() { cb(null); }).catch(function(e) { cb(e); });
+  };
+
+  MySQLStore.prototype.touch = function(sid, data, cb) {
+    var exp = fmtDate(expiry(data));
+    db.execute('UPDATE sessions SET expires=? WHERE session_id=?', [exp, sid])
+      .then(function() { cb(null); }).catch(function(e) { cb(e); });
+  };
+
+  // Purge expired sessions every 15 minutes
+  setInterval(function() {
+    db.execute('DELETE FROM sessions WHERE expires < NOW()').catch(function() {});
+  }, 15 * 60 * 1000);
+
+  return new MySQLStore();
 }
 
-app.use(session({
-  secret:            SESSION_SECRET,
-  resave:            false,
-  saveUninitialized: false,
-  rolling:           true,
-  store:             new MySQLSessionStore(),
-  name:              'netmon.sid',
-  cookie: {
-    httpOnly: true,
-    maxAge:   SESSION_MAX_AGE,
-    sameSite: 'lax',
-    secure:   SECURE_COOKIES,
-    path:     '/',
-  },
-}));
+// Placeholder in-memory session until DB is ready
+// Replaced with MySQL store in initDB()
+var sessionStore = null;
+
+app.use(function(req, res, next) {
+  // Use MySQL store once available, fallback to temp memory session
+  if (!sessionStore) {
+    return session({
+      secret: SESSION_SECRET, resave: false, saveUninitialized: false,
+      name: 'netmon.sid',
+      cookie: { httpOnly: true, maxAge: SESSION_MAX_AGE,
+                sameSite: 'lax', secure: SECURE_COOKIES, path: '/' },
+    })(req, res, next);
+  }
+  return session({
+    secret: SESSION_SECRET, resave: false, saveUninitialized: false,
+    rolling: true, store: sessionStore, name: 'netmon.sid',
+    cookie: { httpOnly: true, maxAge: SESSION_MAX_AGE,
+              sameSite: 'lax', secure: SECURE_COOKIES, path: '/' },
+  })(req, res, next);
+});
+
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 const PUBLIC_PATHS = ['/', '/login', '/api/auth/login', '/api/auth/setup-status'];
