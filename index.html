@@ -1517,7 +1517,7 @@ async function loadHistory() {
   const mins=document.getElementById('hist-window').value;
   if (!iface||!activeDevId) return;
   try {
-    const res=await fetch(`${API}/api/history?switch=${activeDevId}&interface=${encodeURIComponent(iface)}&minutes=${mins}`);
+    const res=await fetch(`${API}/api/history?switch=${activeDevId}&interface=${encodeURIComponent(iface)}&minutes=${mins}`, {credentials:'include'});
     const data=await res.json();
     if (!data.length){document.getElementById('hist-title').textContent='No data for '+iface;return;}
     document.getElementById('hist-title').textContent=iface;
@@ -1551,7 +1551,7 @@ async function loadAverages() {
   const dev=devList.find(d=>d.id===activeDevId);
   document.getElementById('avg-dev-lbl').textContent=dev?dev.label:'';
   try {
-    const res=await fetch(`${API}/api/summary?switch=${activeDevId}&period=${avgPeriod}`);
+    const res=await fetch(`${API}/api/summary?switch=${activeDevId}&period=${avgPeriod}`, {credentials:'include'});
     const data=await res.json();
     if (!data.length){document.getElementById('avg-cards').innerHTML='<div class="no-data">No data yet.</div>';return;}
     avgBarChart.data.labels=data.map(r=>r.interface);
@@ -1575,7 +1575,7 @@ async function loadAverages() {
 // ── Overview tab ───────────────────────────────────────────────────────────────
 async function loadOverview() {
   try {
-    const res=await fetch(`${API}/api/overview`);
+    const res=await fetch(`${API}/api/overview`, {credentials:'include'});
     const data=await res.json();
     document.getElementById('ov-grid').innerHTML=data.length
       ?data.map(r=>`
@@ -1621,13 +1621,13 @@ const devSysInfo = {};
 async function fetchAllSysInfo() {
   try {
     // Load Aruba device info from DB
-    const res = await fetch(`${API}/api/device-info`);
+    const res = await fetch(`${API}/api/device-info`, {credentials:'include'});
     if (res.ok) {
       const data = await res.json();
       Object.assign(devSysInfo, data);
     }
     // Load MikroTik device info from DB
-    const res2 = await fetch(`${API}/api/mikrotik-info`);
+    const res2 = await fetch(`${API}/api/mikrotik-info`, {credentials:'include'});
     if (res2.ok) {
       const data2 = await res2.json();
       // Map to same shape as Aruba sysinfo for unified display
@@ -1661,7 +1661,7 @@ async function fetchAllSysInfo() {
   if (stale.length) {
     await Promise.allSettled(stale.map(async d => {
       try {
-        const res = await fetch(`${API}/api/sysinfo?switch=${d.id}`);
+        const res = await fetch(`${API}/api/sysinfo?switch=${d.id}`, {credentials:'include'});
         if (res.ok) {
           devSysInfo[d.id] = await res.json();
         }
@@ -1785,8 +1785,8 @@ async function saveModal() {
   }
   try {
     const res=editingId
-      ?await fetch(`${API}/api/switches/${editingId}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
-      :await fetch(`${API}/api/switches`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      ?await fetch(`${API}/api/switches/${editingId}`,{credentials:'include',method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+      :await fetch(`${API}/api/switches`,{credentials:'include',method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if (!res.ok){const e=await res.json();alert(e.error||'Save failed');return;}
     closeModal();
     if (editingId) delete devSysInfo[editingId];
@@ -1807,11 +1807,11 @@ async function testModal() {
     ...(type==='mikrotik'?{snmpCommunity:document.getElementById('m-community').value||'public',snmpPort:parseInt(document.getElementById('m-snmpport').value)||161}:{}),
   };
   try {
-    const addRes=await fetch(`${API}/api/switches`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const addRes=await fetch(`${API}/api/switches`,{credentials:'include',method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const added=await addRes.json();
-    const testRes=await fetch(`${API}/api/switches/${added.id}/test`,{method:'POST'});
+    const testRes=await fetch(`${API}/api/switches/${added.id}/test`,{credentials:'include',method:'POST'});
     const result=await testRes.json();
-    await fetch(`${API}/api/switches/${added.id}`,{method:'DELETE'});
+    await fetch(`${API}/api/switches/${added.id}`,{credentials:'include',method:'DELETE'});
     el.textContent=result.message;
     el.style.color=result.ok?'var(--up)':'var(--down)';
     await fetchDevices();
@@ -1819,14 +1819,14 @@ async function testModal() {
 }
 
 async function toggleDev(id){
-  await fetch(`${API}/api/switches/${id}/toggle`,{method:'POST'});
+  await fetch(`${API}/api/switches/${id}/toggle`,{credentials:'include',method:'POST'});
   await fetchDevices(); renderDevList();
 }
 
 async function deleteDev(id){
   const d=devList.find(d=>d.id===id);
   if (!confirm(`Delete ${d?d.label:id}?`)) return;
-  await fetch(`${API}/api/switches/${id}`,{method:'DELETE'});
+  await fetch(`${API}/api/switches/${id}`,{credentials:'include',method:'DELETE'});
   delete devSysInfo[id];
   await fetchDevices(); renderDevList();
 }
@@ -1857,7 +1857,7 @@ async function refreshTopo(){
   } catch(e){ document.getElementById('topo-status').textContent='Error: '+e.message; }
 }
 
-async function loadTopology(){ const res=await fetch(`${API}/api/topology`); if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); }
+async function loadTopology(){ const res=await fetch(`${API}/api/topology`, {credentials:'include'}); if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); }
 
 function autoAssignPositions(){
   const wrap=document.getElementById('topo-wrap');
@@ -2025,7 +2025,7 @@ function setTopoMode(mode,el){
 
 async function savePositions(){
   const pos={}; TOPO.nodes.forEach(n=>{if(n.x!=null)pos[n.id]={x:n.x,y:n.y};});
-  await fetch(`${API}/api/topology/nodes`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(pos)}).catch(()=>{});
+  await fetch(`${API}/api/topology/nodes`,{credentials:'include',method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(pos)}).catch(()=>{});
 }
 
 function openLinkForm(){ populateLinkSelects(); document.getElementById('link-form-wrap').style.display='block'; document.getElementById('lf-label').value=''; document.getElementById('lf-src-port').value=''; document.getElementById('lf-dst-port').value=''; }
@@ -2038,13 +2038,13 @@ async function submitLinkForm(){
   if(!body.sourceId||!body.targetId){document.getElementById('lf-err').textContent='Select both devices';return;}
   if(body.sourceId===body.targetId){document.getElementById('lf-err').textContent='Source and target must differ';return;}
   try {
-    const res=await fetch(`${API}/api/topology/links`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const res=await fetch(`${API}/api/topology/links`,{credentials:'include',method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(!res.ok){const e=await res.json();document.getElementById('lf-err').textContent=e.error;return;}
     closeLinkForm(); refreshTopo();
   } catch(e){document.getElementById('lf-err').textContent=e.message;}
 }
 
-async function deleteLink(id){ if(!confirm('Delete this link?'))return; await fetch(`${API}/api/topology/links/${id}`,{method:'DELETE'}); closeTopoPopup(); refreshTopo(); }
+async function deleteLink(id){ if(!confirm('Delete this link?'))return; await fetch(`${API}/api/topology/links/${id}`,{credentials:'include',method:'DELETE'}); closeTopoPopup(); refreshTopo(); }
 
 function renderLinksTable(){
   const wrap=document.getElementById('links-table-wrap');
@@ -2139,7 +2139,7 @@ document.addEventListener('DOMContentLoaded',()=>{
 async function loadHiddenIfaces() {
   if (!activeDevId) return;
   try {
-    const res = await fetch(`${API}/api/hidden?switch=${activeDevId}`);
+    const res = await fetch(`${API}/api/hidden?switch=${activeDevId}`, {credentials:'include'});
     if (!res.ok) return;
     const list = await res.json();
     hiddenIfaces = new Set(list);
@@ -2149,7 +2149,7 @@ async function loadHiddenIfaces() {
 async function toggleHideIface(event, iface) {
   event.stopPropagation();
   try {
-    await fetch(`${API}/api/hidden/toggle`, {
+    await fetch(`${API}/api/hidden/toggle`, {credentials:'include',
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ switchId:activeDevId, interface:iface })
     });
@@ -2170,7 +2170,7 @@ let backupFiles = []; // cache for diff selector
 async function initBackupsTab() {
   // Load schedule
   try {
-    const res  = await fetch(`${API}/api/backups/schedule`);
+    const res  = await fetch(`${API}/api/backups/schedule`, {credentials:'include'});
     const sched = await res.json();
     document.getElementById('bk-hours').value   = sched.intervalHours || 24;
     document.getElementById('bk-enabled').checked = !!sched.enabled;
@@ -2192,7 +2192,7 @@ async function saveBackupSchedule() {
     intervalHours: parseInt(document.getElementById('bk-hours').value) || 24,
     enabled:       document.getElementById('bk-enabled').checked,
   };
-  await fetch(`${API}/api/backups/schedule`, {
+  await fetch(`${API}/api/backups/schedule`, {credentials:'include',
     method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
   });
   const stat = document.getElementById('bk-status');
@@ -2206,7 +2206,7 @@ async function loadBackupList() {
   const wrap = document.getElementById('bk-list-wrap');
   wrap.innerHTML = '<div class="no-data">Loading…</div>';
   try {
-    const res   = await fetch(`${API}/api/backups/list?switch=${devId}`);
+    const res   = await fetch(`${API}/api/backups/list?switch=${devId}`, {credentials:'include'});
     backupFiles = await res.json();
     if (!backupFiles.length) { wrap.innerHTML = '<div class="no-data">No backups yet for this device.</div>'; return; }
 
@@ -2241,7 +2241,7 @@ async function runBackupNow() {
   const stat = document.getElementById('bk-status');
   stat.textContent = 'Running backup…'; stat.style.color='var(--muted)';
   try {
-    const res    = await fetch(`${API}/api/backups/run`, { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
+    const res    = await fetch(`${API}/api/backups/run`, {credentials:'include', method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
     const result = await res.json();
     const ok     = Array.isArray(result) ? result.filter(r=>r.ok).length : (result.ok?1:0);
     const total  = Array.isArray(result) ? result.length : 1;
@@ -2257,7 +2257,7 @@ async function runBackupOne() {
   const stat = document.getElementById('bk-status');
   stat.textContent = 'Backing up…'; stat.style.color='var(--muted)';
   try {
-    const res    = await fetch(`${API}/api/backups/run`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({switchId:devId}) });
+    const res    = await fetch(`${API}/api/backups/run`, {credentials:'include', method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({switchId:devId}) });
     const result = await res.json();
     stat.textContent = result.ok ? `Backup saved: ${result.filename} (${(result.size/1024).toFixed(1)} KB)` : 'Error: '+result.reason;
     stat.style.color = result.ok ? 'var(--up)' : 'var(--down)';
@@ -2283,7 +2283,7 @@ async function runDiff() {
   if (!devId || !f1 || !f2) return;
   out.innerHTML = '<div style="color:var(--muted);font-size:12px;">Computing diff…</div>';
   try {
-    const res    = await fetch(`${API}/api/backups/diff?switch=${devId}&file1=${encodeURIComponent(f1)}&file2=${encodeURIComponent(f2)}`);
+    const res    = await fetch(`${API}/api/backups/diff?switch=${devId}&file1=${encodeURIComponent(f1)}&file2=${encodeURIComponent(f2)}`, {credentials:'include'});
     const result = await res.json();
     title.textContent = `Config diff — ${result.changes} line(s) changed`;
     if (!result.changes) {
@@ -2349,8 +2349,8 @@ async function loadPrefsPanel(devId) {
   try {
     // Fetch hidden list and latest interface data in parallel
     const [hiddenRes, ifaceRes] = await Promise.all([
-      fetch(`${API}/api/hidden?switch=${devId}`),
-      fetch(`${API}/api/live?switch=${devId}`),
+      fetch(`${API}/api/hidden?switch=${devId}`, {credentials:'include'}),
+      fetch(`${API}/api/live?switch=${devId}`, {credentials:'include'}),
     ]);
 
     const hiddenList = hiddenRes.ok ? await hiddenRes.json() : [];
@@ -2411,7 +2411,7 @@ async function loadPrefsPanel(devId) {
 
 async function toggleIfaceVisibility(devId, iface, visible) {
   try {
-    await fetch(`${API}/api/hidden/toggle`, {
+    await fetch(`${API}/api/hidden/toggle`, {credentials:'include',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ switchId: devId, interface: iface }),
@@ -2439,7 +2439,7 @@ async function toggleIfaceVisibility(devId, iface, visible) {
 
 async function refreshPrefsBadge(devId) {
   try {
-    const res  = await fetch(`${API}/api/hidden?switch=${devId}`);
+    const res  = await fetch(`${API}/api/hidden?switch=${devId}`, {credentials:'include'});
     const list = await res.json();
     // Update hidden count badge in the panel title
     const panel = document.getElementById('prefs-panel-' + devId);
@@ -2461,7 +2461,7 @@ async function refreshPrefsBadge(devId) {
 
 async function showAllInterfaces(devId) {
   try {
-    await fetch(`${API}/api/hidden`, {
+    await fetch(`${API}/api/hidden`, {credentials:'include',
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ switchId: devId, interfaces: [] }),
@@ -2473,10 +2473,10 @@ async function showAllInterfaces(devId) {
 
 async function hideDownInterfaces(devId) {
   try {
-    const res    = await fetch(`${API}/api/live?switch=${devId}`);
+    const res    = await fetch(`${API}/api/live?switch=${devId}`, {credentials:'include'});
     const ifaces = await res.json();
     const downList = ifaces.filter(i => i.link_status !== 'up').map(i => i.interface);
-    await fetch(`${API}/api/hidden`, {
+    await fetch(`${API}/api/hidden`, {credentials:'include',
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ switchId: devId, interfaces: downList }),
@@ -2493,7 +2493,7 @@ async function hideDownInterfaces(devId) {
 
 async function initScanTab() {
   try {
-    const res = await fetch(`${API}/api/scan/config`);
+    const res = await fetch(`${API}/api/scan/config`, {credentials:'include'});
     const cfg = await res.json();
     document.getElementById('sc-port').value     = cfg.port      || '443';
     document.getElementById('sc-user').value     = cfg.username  || 'admin';
@@ -2538,7 +2538,7 @@ async function addSubnet() {
   const err    = document.getElementById('sn-err');
   if (!subnet) { err.textContent = 'Enter a network address'; return; }
   try {
-    const res = await fetch(`${API}/api/scan/subnets`, {
+    const res = await fetch(`${API}/api/scan/subnets`, {credentials:'include',
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ subnet, prefixLen:parseInt(prefix), label }),
     });
@@ -2553,12 +2553,12 @@ async function addSubnet() {
 
 async function removeSubnet(id) {
   if (!confirm('Remove this subnet?')) return;
-  await fetch(`${API}/api/scan/subnets/${id}`, { method:'DELETE' });
+  await fetch(`${API}/api/scan/subnets/${id}`, {credentials:'include', method:'DELETE' });
   await initScanTab();
 }
 
 async function toggleSubnet(id, enabled) {
-  await fetch(`${API}/api/scan/subnets/${id}`, {
+  await fetch(`${API}/api/scan/subnets/${id}`, {credentials:'include',
     method:'PUT', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ enabled }),
   });
@@ -2574,7 +2574,7 @@ async function saveScanConfig() {
   };
   const pass = document.getElementById('sc-pass').value;
   if (pass) body.password = pass;
-  await fetch(`${API}/api/scan/config`, {
+  await fetch(`${API}/api/scan/config`, {credentials:'include',
     method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body),
   });
   const stat = document.getElementById('scan-status');
@@ -2601,7 +2601,7 @@ async function runScan() {
     body.username = document.getElementById('sc-user').value.trim();
     body.interval = parseInt(document.getElementById('sc-interval').value);
     msg.textContent = 'Probing subnets…';
-    const res    = await fetch(`${API}/api/scan/run`, {
+    const res    = await fetch(`${API}/api/scan/run`, {credentials:'include',
       method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body),
     });
     const result = await res.json();
@@ -2659,7 +2659,7 @@ async function loadSwitchLogs() {
     const params = new URLSearchParams({ switch: devId, limit });
     if (severity) params.set('severity', severity);
     if (search)   params.set('search', search);
-    const res = await fetch(`${API}/api/switch-logs?${params}`);
+    const res = await fetch(`${API}/api/switch-logs?${params}`, {credentials:'include'});
     if (!res.ok) {
       const e = await res.json();
       wrap.innerHTML = `<div class="no-data" style="color:var(--down);">Error: ${e.error}</div>`;
@@ -2673,7 +2673,7 @@ async function loadSwitchLogs() {
 
 async function loadSwitchLogStats() {
   try {
-    const res  = await fetch(`${API}/api/switch-logs/stats`);
+    const res  = await fetch(`${API}/api/switch-logs/stats`, {credentials:'include'});
     const rows = await res.json();
     const el   = document.getElementById('sl-db-stats');
     if (!el) return;
@@ -2691,7 +2691,7 @@ async function loadSwitchLogStats() {
 
 async function saveLogRetention() {
   const days = parseInt(document.getElementById('sl-retention').value) || 90;
-  await fetch(`${API}/api/switch-logs/retention`, {
+  await fetch(`${API}/api/switch-logs/retention`, {credentials:'include',
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ retentionDays: days }),
   });
@@ -2705,7 +2705,7 @@ async function syncSwitchLogs() {
   st.textContent = 'Syncing…';
   try {
     const body = devId ? { switch: devId } : {};
-    const res  = await fetch(`${API}/api/switch-logs/sync`, {
+    const res  = await fetch(`${API}/api/switch-logs/sync`, {credentials:'include',
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
@@ -2753,7 +2753,7 @@ let _alTimer = null;
 async function initAppLogs() {
   // Populate category filter
   try {
-    const res  = await fetch(`${API}/api/app-logs/categories`);
+    const res  = await fetch(`${API}/api/app-logs/categories`, {credentials:'include'});
     const cats = await res.json();
     const sel  = document.getElementById('al-category');
     sel.innerHTML = '<option value="">All categories</option>' +
@@ -2789,7 +2789,7 @@ async function loadAppLogs() {
     if (level)    params.set('level', level);
     if (category) params.set('category', category);
     if (search)   params.set('search', search);
-    const res     = await fetch(`${API}/api/app-logs?${params}`);
+    const res     = await fetch(`${API}/api/app-logs?${params}`, {credentials:'include'});
     if (!res.ok) { wrap.innerHTML='<div class="no-data" style="color:var(--down);">Could not load logs.</div>'; return; }
     const entries = await res.json();
     count.textContent = `${entries.length} entries`;
@@ -2848,7 +2848,7 @@ async function runSearch() {
   out.innerHTML = '';
 
   try {
-    const res  = await fetch(`${API}/api/search?q=${encodeURIComponent(q)}`);
+    const res  = await fetch(`${API}/api/search?q=${encodeURIComponent(q)}`, {credentials:'include'});
     const data = await res.json();
 
     if (!res.ok) {
@@ -2976,7 +2976,7 @@ function refreshSysInfoModal() {
 async function loadSysInfoModal(devId) {
   const body = document.getElementById('sysinfo-modal-body');
   try {
-    const res = await fetch(`${API}/api/sysinfo?switch=${devId}`);
+    const res = await fetch(`${API}/api/sysinfo?switch=${devId}`, {credentials:'include'});
     if (!res.ok) {
       const e = await res.json().catch(() => ({ error: 'Request failed' }));
       body.innerHTML = `<div style="color:var(--down);font-size:13px;">${escHtml(e.error)}</div>`;
@@ -3056,7 +3056,7 @@ function loadSysInfoPanel(devId) { loadSysInfoModal(devId); }
 
 async function initMtScanTab() {
   try {
-    const res = await fetch(`${API}/api/scan/mikrotik-config`);
+    const res = await fetch(`${API}/api/scan/mikrotik-config`, {credentials:'include'});
     if (!res.ok) return;
     const cfg = await res.json();
     document.getElementById('mt-community').value   = cfg.community   || 'public';
@@ -3093,7 +3093,7 @@ async function addMtSubnet() {
   const prefixLen = document.getElementById('mt-prefix').value;
   const label     = document.getElementById('mt-label').value.trim();
   if (!subnet) return;
-  const res = await fetch(`${API}/api/scan/mikrotik-subnets`, {
+  const res = await fetch(`${API}/api/scan/mikrotik-subnets`, {credentials:'include',
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ subnet, prefixLen, label }),
   });
@@ -3106,7 +3106,7 @@ async function addMtSubnet() {
 }
 
 async function removeMtSubnet(id) {
-  await fetch(`${API}/api/scan/mikrotik-subnets/${id}`, { method:'DELETE' });
+  await fetch(`${API}/api/scan/mikrotik-subnets/${id}`, {credentials:'include', method:'DELETE' });
   await initMtScanTab();
 }
 
@@ -3118,7 +3118,7 @@ async function saveMtScanConfig() {
     scanHours:  parseInt(document.getElementById('mt-scan-hours').value) || 6,
     enabled:    document.getElementById('mt-enabled').checked,
   };
-  const res = await fetch(`${API}/api/scan/mikrotik-config`, {
+  const res = await fetch(`${API}/api/scan/mikrotik-config`, {credentials:'include',
     method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body),
   });
   document.getElementById('mt-scan-status').textContent = res.ok ? 'Saved.' : 'Save failed.';
@@ -3131,7 +3131,7 @@ async function runMtScan() {
   btn.disabled = true;
   st.textContent = 'Scanning…';
   try {
-    const res  = await fetch(`${API}/api/scan/mikrotik-run`, { method:'POST' });
+    const res  = await fetch(`${API}/api/scan/mikrotik-run`, {credentials:'include', method:'POST' });
     const data = await res.json();
     st.textContent = `Done — scanned ${data.scanned} hosts, found ${data.found}, added ${data.added}`;
     if (data.results && data.results.length) {
@@ -3197,7 +3197,7 @@ async function loadMtTools() {
   const body = document.getElementById('mt-tools-body');
   if (!mtToolsData) body.innerHTML = '<div class="no-data">Loading…</div>';
   try {
-    const res = await fetch(`${API}/api/mikrotik-tools?switch=${mtToolsDevId}`);
+    const res = await fetch(`${API}/api/mikrotik-tools?switch=${mtToolsDevId}`, {credentials:'include'});
     if (!res.ok) {
       const e = await res.json().catch(() => ({ error: 'Request failed' }));
       body.innerHTML = `<div style="color:var(--down);font-size:13px;">Error: ${escHtml(e.error)}</div>`;
@@ -3306,7 +3306,7 @@ async function loadSystemStatus() {
   const body = document.getElementById('sys-status-body');
   if (!body) return;
   try {
-    const res = await fetch(`${API}/api/status`);
+    const res = await fetch(`${API}/api/status`, {credentials:'include'});
     if (!res.ok) throw new Error('Status unavailable');
     const d = await res.json();
     body.innerHTML = renderSystemStatus(d);
@@ -3416,7 +3416,7 @@ function renderSystemStatus(d) {
 
 async function initExportSettings() {
   try {
-    const res = await fetch(`${API}/api/export/schedule`);
+    const res = await fetch(`${API}/api/export/schedule`, {credentials:'include'});
     if (!res.ok) return;
     const cfg = await res.json();
     document.getElementById('exp-dir').value     = cfg.outputDir || '';
@@ -3432,7 +3432,7 @@ async function exportCSV(type) {
   a.href = `${API}/api/export/run`;
   // Use fetch + blob for POST
   try {
-    const res = await fetch(`${API}/api/export/run`, {
+    const res = await fetch(`${API}/api/export/run`, {credentials:'include',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type, inline: true }),
@@ -3458,7 +3458,7 @@ async function saveExportSchedule() {
     intervalHours: parseInt(document.getElementById('exp-hours').value) || 24,
     enabled:       document.getElementById('exp-enabled').checked,
   };
-  const res = await fetch(`${API}/api/export/schedule`, {
+  const res = await fetch(`${API}/api/export/schedule`, {credentials:'include',
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
@@ -3471,7 +3471,7 @@ async function runServerExport() {
   const dir = document.getElementById('exp-dir').value.trim() || null;
   st.textContent = 'Exporting…';
   try {
-    const res  = await fetch(`${API}/api/export/run`, {
+    const res  = await fetch(`${API}/api/export/run`, {credentials:'include',
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ outputDir: dir, inline: false }),
     });
@@ -3486,7 +3486,7 @@ async function loadExportList() {
   const el  = document.getElementById('exp-list');
   const dir = document.getElementById('exp-dir')?.value.trim() || '';
   try {
-    const res   = await fetch(`${API}/api/export/list${dir ? '?dir='+encodeURIComponent(dir) : ''}`);
+    const res   = await fetch(`${API}/api/export/list${dir ? '?dir='+encodeURIComponent(dir) : ''}`, {credentials:'include'});
     const files = await res.json();
     if (!files.length) {
       el.innerHTML = '<div class="no-data" style="font-size:12px;">No export files found.</div>';
@@ -3523,7 +3523,7 @@ async function openMtSysInfo(devId) {
   } else {
     // Fetch fresh from DB
     try {
-      const res = await fetch(`${API}/api/mikrotik-info`);
+      const res = await fetch(`${API}/api/mikrotik-info`, {credentials:'include'});
       if (res.ok) {
         const data = await res.json();
         if (data[devId]) {
@@ -3575,7 +3575,7 @@ function renderMtSysInfoModal(info, dev) {
 
 async function loadRetentionSetting() {
   try {
-    const res = await fetch(`${API}/api/switch-logs/retention`);
+    const res = await fetch(`${API}/api/switch-logs/retention`, {credentials:'include'});
     const data = await res.json();
     const el = document.getElementById('sl-retention');
     if (el) el.value = data.retentionDays || 90;
@@ -3604,7 +3604,7 @@ function switchLogTab(tab) {
 
 async function initCvePage() {
   try {
-    const res = await fetch(`${API}/api/cve/config`);
+    const res = await fetch(`${API}/api/cve/config`, {credentials:'include'});
     const cfg = await res.json();
     document.getElementById('cve-enabled').checked = !!cfg.enabled;
     document.getElementById('cve-hours').value      = cfg.intervalHours || 24;
@@ -3626,7 +3626,7 @@ async function saveCveConfig() {
     nvdApiKey:     key === '••••••••' ? undefined : key,
   };
   if (body.nvdApiKey === undefined) delete body.nvdApiKey;
-  await fetch(`${API}/api/cve/config`, {
+  await fetch(`${API}/api/cve/config`, {credentials:'include',
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
@@ -3638,13 +3638,13 @@ async function runCveCheck() {
   const bar = document.getElementById('cve-status-bar');
   bar.textContent = 'CVE check running — this may take several minutes due to NVD rate limits…';
   document.getElementById('cve-results-body').innerHTML = '<div class="no-data">Checking…</div>';
-  await fetch(`${API}/api/cve/run`, { method: 'POST' });
+  await fetch(`${API}/api/cve/run`, {credentials:'include', method: 'POST' });
   // Poll for results every 10s
   let attempts = 0;
   const poll = setInterval(async () => {
     attempts++;
     await loadCveResults();
-    const cfg = await (await fetch(`${API}/api/cve/config`)).json();
+    const cfg = await (await fetch(`${API}/api/cve/config`, {credentials:'include'})).json();
     if (cfg.lastCheck) {
       clearInterval(poll);
       bar.textContent = `Last checked: ${new Date(cfg.lastCheck).toLocaleString()}`;
@@ -3656,7 +3656,7 @@ async function runCveCheck() {
 async function loadCveResults() {
   const body = document.getElementById('cve-results-body');
   try {
-    const res  = await fetch(`${API}/api/cve/results`);
+    const res  = await fetch(`${API}/api/cve/results`, {credentials:'include'});
     const data = await res.json();
     const devResults = Object.values(data);
     if (!devResults.length) {
@@ -3752,7 +3752,7 @@ async function initAuth() {
 }
 
 async function doLogout() {
-  await fetch(`${API}/api/auth/logout`, { method: 'POST' });
+  await fetch(`${API}/api/auth/logout`, {credentials:'include', method: 'POST' });
   window.location = '/login';
 }
 
@@ -3762,7 +3762,7 @@ async function loadUserList() {
   const el = document.getElementById('user-list');
   if (!el) return;
   try {
-    const res  = await fetch(`${API}/api/auth/users`);
+    const res  = await fetch(`${API}/api/auth/users`, {credentials:'include'});
     if (!res.ok) { el.innerHTML = '<div class="no-data" style="font-size:12px;">Admin access required</div>'; return; }
     const users = await res.json();
     el.innerHTML = users.map(u => `
@@ -3799,7 +3799,7 @@ async function saveNewUser() {
   const err = document.getElementById('au-err');
   if (!body.username || !body.password) { err.textContent = 'Username and password required'; return; }
   if (body.password.length < 15) { err.textContent = 'Password must be at least 15 characters'; return; }
-  const res  = await fetch(`${API}/api/auth/users`, {
+  const res  = await fetch(`${API}/api/auth/users`, {credentials:'include',
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
@@ -3811,7 +3811,7 @@ async function saveNewUser() {
 
 async function toggleUserEnabled(id, username, currentEnabled) {
   if (!confirm(`${currentEnabled ? 'Disable' : 'Enable'} user "${username}"?`)) return;
-  await fetch(`${API}/api/auth/users/${id}`, {
+  await fetch(`${API}/api/auth/users/${id}`, {credentials:'include',
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled: !currentEnabled }),
   });
@@ -3820,7 +3820,7 @@ async function toggleUserEnabled(id, username, currentEnabled) {
 
 async function deleteUser(id, username) {
   if (!confirm(`Delete user "${username}"? This cannot be undone.`)) return;
-  await fetch(`${API}/api/auth/users/${id}`, { method: 'DELETE' });
+  await fetch(`${API}/api/auth/users/${id}`, {credentials:'include', method: 'DELETE' });
   loadUserList();
 }
 
@@ -3831,7 +3831,7 @@ async function changeMyPassword() {
   const st      = document.getElementById('cp-status');
   if (next.length < 15) { st.textContent = 'New password must be at least 15 characters'; st.style.color='var(--down)'; return; }
   if (next !== confirm) { st.textContent = 'New passwords do not match'; st.style.color='var(--down)'; return; }
-  const res  = await fetch(`${API}/api/auth/change-password`, {
+  const res  = await fetch(`${API}/api/auth/change-password`, {credentials:'include',
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ currentPassword: current, newPassword: next }),
   });
@@ -3867,7 +3867,7 @@ async function saveResetPassword() {
   const err     = document.getElementById('rp-err');
   if (pwd.length < 15)    { err.textContent = 'Password must be at least 15 characters'; return; }
   if (pwd !== confirm)   { err.textContent = 'Passwords do not match'; return; }
-  const res  = await fetch(`${API}/api/auth/users/${resetPwUserId}`, {
+  const res  = await fetch(`${API}/api/auth/users/${resetPwUserId}`, {credentials:'include',
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ password: pwd }),
   });
