@@ -910,29 +910,38 @@ app.use(cors({
 app.use(express.json());
 
 // Session middleware — uses MySQL session store to survive restarts
-// Trust nginx reverse proxy so req.secure works correctly
+// Trust nginx reverse proxy — required for X-Forwarded-Proto detection
 app.set('trust proxy', 1);
+
+// Determine if we should use secure cookies
+// true  = HTTPS only (set when behind nginx/HTTPS proxy)
+// false = allow HTTP (for direct local access without proxy)
+const SECURE_COOKIES = process.env.NODE_ENV === 'production';
 
 app.use(session({
   secret:            SESSION_SECRET,
   resave:            false,
   saveUninitialized: false,
-  rolling:           true,  // reset expiry on each request
+  rolling:           true,
+  name:              'netmon.sid',
   cookie: {
     httpOnly: true,
     maxAge:   SESSION_MAX_AGE,
-    sameSite: 'lax',
-    secure:   'auto',  // automatically set secure=true when behind HTTPS proxy
+    sameSite: 'strict',
+    secure:   SECURE_COOKIES,
+    path:     '/',
   },
 }));
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
-const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/setup-status'];
+const PUBLIC_PATHS = ['/', '/login', '/api/auth/login', '/api/auth/setup-status'];
 
 function requireAuth(req, res, next) {
   if (PUBLIC_PATHS.includes(req.path) || req.path.startsWith('/api/auth/')) return next();
   if (req.session?.userId) return next();
-  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Not authenticated' });
+  if (req.path.startsWith('/api/')) {
+    return res.status(401).json({ error: 'Not authenticated', path: req.path });
+  }
   res.redirect('/login');
 }
 
@@ -1045,9 +1054,12 @@ app.post('/api/auth/login', async (req, res) => {
       req.session.userId   = user.id;
       req.session.username = user.username;
       req.session.role     = user.role;
-      db.execute('UPDATE users SET last_login = NOW() WHERE id = ?', [user.id]);
-      appLog('info', 'auth', `Login: ${username} (${user.role})`);
-      res.json({ ok: true, username: user.username, role: user.role });
+      req.session.save((saveErr) => {
+        if (saveErr) return res.status(500).json({ error: 'Session save failed: ' + saveErr.message });
+        db.execute('UPDATE users SET last_login = NOW() WHERE id = ?', [user.id]);
+        appLog('info', 'auth', `Login: ${username} (${user.role}) secure=${SECURE_COOKIES}`);
+        res.json({ ok: true, username: user.username, role: user.role });
+      });
     });
   } catch(e) {
     res.status(500).json({ error: e.message });
