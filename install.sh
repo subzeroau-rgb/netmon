@@ -465,14 +465,20 @@ SESSION_SECRET=${SESSION_SECRET}
 ADMIN_USERNAME=${ADMIN_USER}
 ADMIN_PASSWORD=${ADMIN_PASS}
 
-# Data paths
-EXPORT_DIR=${DATA_DIR}/exports
-BACKUP_DIR=${DATA_DIR}/backups
-LOG_FILE=${LOG_DIR}/app.log
+# Data and log paths (used by the application for all runtime files)
+DATA_DIR=${DATA_DIR}
+LOG_DIR=${LOG_DIR}
 ENV
 
-# Symlink .env into backend dir so dotenv finds it
-ln -sfn /etc/netmon/env "${BACKEND_DIR}/.env"
+# Copy env file as .env in backend dir (dotenv may not follow symlinks)
+cp /etc/netmon/env "${BACKEND_DIR}/.env"
+chown root:"${SVC_USER}" "${BACKEND_DIR}/.env"
+chmod 640 "${BACKEND_DIR}/.env"
+print_ok ".env written to ${BACKEND_DIR}/.env"
+
+# Keep /etc/netmon/env as the canonical config — remind user to sync after edits
+print_note "Note: edit /etc/netmon/env to change settings, then run:"
+print_note "  sudo cp /etc/netmon/env ${BACKEND_DIR}/.env && sudo systemctl restart netmon"
 
 chown -R root:"${SVC_USER}" /etc/netmon
 chmod 750 /etc/netmon

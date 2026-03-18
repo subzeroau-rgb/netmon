@@ -1,4 +1,13 @@
-require('dotenv').config();
+// Load environment — try /etc/netmon/env first (production install),
+// fall back to .env in the same directory (development)
+const _envPaths = [
+  require('path').join('/etc/netmon/env'),
+  require('path').join(__dirname, '.env'),
+];
+for (const _ep of _envPaths) {
+  const _r = require('dotenv').config({ path: _ep });
+  if (!_r.error) { console.log('[env] Loaded config from', _ep); break; }
+}
 const express  = require('express');
 const session      = require('express-session');
 const bcrypt       = require('bcryptjs');
