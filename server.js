@@ -237,7 +237,8 @@ async function initDB() {
   console.log('[db] auth tables ready');
 
   // Initialise MySQL session store now that DB pool is ready
-  sessionStore = makeMySQLStore(db);
+  sessionStore   = makeMySQLStore(db);
+  sessionHandler = null;   // force rebuild with MySQL store on next request
   console.log('[db] MySQL session store ready');
 
   console.log('[db] MySQL session store ready');
@@ -982,26 +983,36 @@ function makeMySQLStore(db) {
   return new MySQLStore();
 }
 
-// Placeholder in-memory session until DB is ready
-// Replaced with MySQL store in initDB()
-var sessionStore = null;
+// Session middleware — uses a lazy-initialised MySQL store.
+// The store object is created once in initDB() and reused for all requests.
+// We use a proxy pattern so the middleware is registered once at startup
+// but picks up the MySQL store as soon as it becomes available.
+var sessionStore   = null;   // set in initDB()
+var sessionHandler = null;   // built once store is ready
+
+function getSessionHandler() {
+  if (sessionHandler) return sessionHandler;
+  var store = sessionStore || undefined;
+  sessionHandler = session({
+    secret:            SESSION_SECRET,
+    resave:            false,
+    saveUninitialized: false,
+    rolling:           true,
+    store:             store,
+    name:              'netmon.sid',
+    cookie: {
+      httpOnly: true,
+      maxAge:   SESSION_MAX_AGE,
+      sameSite: 'lax',
+      secure:   SECURE_COOKIES,
+      path:     '/',
+    },
+  });
+  return sessionHandler;
+}
 
 app.use(function(req, res, next) {
-  // Use MySQL store once available, fallback to temp memory session
-  if (!sessionStore) {
-    return session({
-      secret: SESSION_SECRET, resave: false, saveUninitialized: false,
-      name: 'netmon.sid',
-      cookie: { httpOnly: true, maxAge: SESSION_MAX_AGE,
-                sameSite: 'lax', secure: SECURE_COOKIES, path: '/' },
-    })(req, res, next);
-  }
-  return session({
-    secret: SESSION_SECRET, resave: false, saveUninitialized: false,
-    rolling: true, store: sessionStore, name: 'netmon.sid',
-    cookie: { httpOnly: true, maxAge: SESSION_MAX_AGE,
-              sameSite: 'lax', secure: SECURE_COOKIES, path: '/' },
-  })(req, res, next);
+  return getSessionHandler()(req, res, next);
 });
 
 
