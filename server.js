@@ -935,7 +935,8 @@ const SECURE_COOKIES = process.env.NODE_ENV === 'production';
 function makeMySQLStore(db) {
   const Store = session.Store;
   function fmtDate(ms) {
-    // Always store as UTC datetime string for consistent comparison
+    // Store as UTC datetime — toISOString() always returns UTC
+    // e.g. '2026-03-18 19:07:43' in UTC regardless of server timezone
     return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
   }
   function expiry(data) {
@@ -958,11 +959,12 @@ function makeMySQLStore(db) {
         // Compare expiry in UTC — MySQL DATETIME has no timezone info
         // mysql2 returns DATETIME as a JS Date object (using server local time)
         // so we compare directly with Date.now()
+        // mysql2 returns DATETIME as JS Date in server local time — getTime() gives UTC ms
         var expires = row.expires instanceof Date
           ? row.expires.getTime()
-          : new Date(String(row.expires).replace(' ', 'T') + 'Z').getTime();
+          : new Date(String(row.expires)).getTime();
         if (expires < Date.now()) {
-          appLog('debug', 'auth', 'session.get: ' + sid.slice(0,8) + ' EXPIRED expires=' + new Date(expires).toISOString());
+          appLog('debug', 'auth', 'session.get: ' + sid.slice(0,8) + ' EXPIRED');
           return cb(null, null);
         }
         appLog('debug', 'auth', 'session.get: ' + sid.slice(0,8) + ' FOUND ok');
@@ -976,18 +978,13 @@ function makeMySQLStore(db) {
   };
 
   MySQLStore.prototype.set = function(sid, data, cb) {
-    var exp = fmtDate(expiry(data));
+    var expSec = Math.floor(expiry(data) / 1000);
+    appLog('debug', 'auth', 'session.set: sid=' + sid.slice(0,8) + ' expUTC=' + new Date(expSec*1000).toISOString());
     db.execute(
-      'INSERT INTO sessions (session_id, expires, data) VALUES (?,?,?) ' +
-      'ON DUPLICATE KEY UPDATE expires=VALUES(expires), data=VALUES(data)',
-      [sid, exp, JSON.stringify(data)]
-    ).then(function() {
-        appLog('debug','auth','session.set: sid='+sid.slice(0,8)+' exp='+exp);
-        cb(null);
-      }).catch(function(e) {
-        appLog('warn','auth','session.set error: '+e.message);
-        cb(e);
-      });
+      'INSERT INTO sessions (session_id, expires, data) VALUES (?, FROM_UNIXTIME(?), ?) ' +
+      'ON DUPLICATE KEY UPDATE expires=FROM_UNIXTIME(?), data=VALUES(data)',
+      [sid, expSec, JSON.stringify(data), expSec]
+    ).then(function() { cb(null); }).catch(function(e) { cb(e); });
   };
 
   MySQLStore.prototype.destroy = function(sid, cb) {
@@ -996,14 +993,15 @@ function makeMySQLStore(db) {
   };
 
   MySQLStore.prototype.touch = function(sid, data, cb) {
-    var exp = fmtDate(expiry(data));
-    db.execute('UPDATE sessions SET expires=? WHERE session_id=?', [exp, sid])
-      .then(function() { cb(null); }).catch(function(e) { cb(e); });
+    var expSec = Math.floor(expiry(data) / 1000);
+    db.execute(
+      'UPDATE sessions SET expires=FROM_UNIXTIME(?) WHERE session_id=?', [expSec, sid]
+    ).then(function() { cb(null); }).catch(function(e) { cb(e); });
   };
 
   // Purge expired sessions every 15 minutes
   setInterval(function() {
-    db.execute('DELETE FROM sessions WHERE expires < UTC_TIMESTAMP()').catch(function() {});
+    db.execute('DELETE FROM sessions WHERE expires < FROM_UNIXTIME(?)', [Math.floor(Date.now()/1000)]).catch(function() {});
   }, 15 * 60 * 1000);
 
   return new MySQLStore();
