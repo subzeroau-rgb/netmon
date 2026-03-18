@@ -935,6 +935,7 @@ const SECURE_COOKIES = process.env.NODE_ENV === 'production';
 function makeMySQLStore(db) {
   const Store = session.Store;
   function fmtDate(ms) {
+    // Always store as UTC datetime string for consistent comparison
     return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
   }
   function expiry(data) {
@@ -950,20 +951,26 @@ function makeMySQLStore(db) {
     db.execute('SELECT data, expires FROM sessions WHERE session_id=?', [sid])
       .then(function([rows]) {
         if (!rows || !rows.length) {
-          appLog('debug','auth','session.get: sid='+sid.slice(0,8)+' NOT FOUND in DB');
+          appLog('debug', 'auth', 'session.get: ' + sid.slice(0,8) + ' NOT FOUND');
           return cb(null, null);
         }
         var row = rows[0];
-        var now = new Date();
-        if (new Date(row.expires) < now) {
-          appLog('debug','auth','session.get: sid='+sid.slice(0,8)+' EXPIRED at '+row.expires);
+        // Compare expiry in UTC — MySQL DATETIME has no timezone info
+        // mysql2 returns DATETIME as a JS Date object (using server local time)
+        // so we compare directly with Date.now()
+        var expires = row.expires instanceof Date
+          ? row.expires.getTime()
+          : new Date(String(row.expires).replace(' ', 'T') + 'Z').getTime();
+        if (expires < Date.now()) {
+          appLog('debug', 'auth', 'session.get: ' + sid.slice(0,8) + ' EXPIRED expires=' + new Date(expires).toISOString());
           return cb(null, null);
         }
-        appLog('debug','auth','session.get: sid='+sid.slice(0,8)+' FOUND expires='+row.expires);
-        try { cb(null, JSON.parse(row.data)); } catch(e) { cb(null, null); }
+        appLog('debug', 'auth', 'session.get: ' + sid.slice(0,8) + ' FOUND ok');
+        try { cb(null, JSON.parse(row.data)); }
+        catch(e) { cb(null, null); }
       })
       .catch(function(e) {
-        appLog('warn','auth','session.get error: '+e.message);
+        appLog('warn', 'auth', 'session.get error: ' + e.message);
         cb(e);
       });
   };
@@ -996,7 +1003,7 @@ function makeMySQLStore(db) {
 
   // Purge expired sessions every 15 minutes
   setInterval(function() {
-    db.execute('DELETE FROM sessions WHERE expires < NOW()').catch(function() {});
+    db.execute('DELETE FROM sessions WHERE expires < UTC_TIMESTAMP()').catch(function() {});
   }, 15 * 60 * 1000);
 
   return new MySQLStore();
