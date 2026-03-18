@@ -939,6 +939,10 @@ const PUBLIC_PATHS = ['/', '/login', '/api/auth/login', '/api/auth/setup-status'
 function requireAuth(req, res, next) {
   if (PUBLIC_PATHS.includes(req.path) || req.path.startsWith('/api/auth/')) return next();
   if (req.session?.userId) return next();
+  // Log why auth failed to help diagnose
+  const sid = req.session?.id ? req.session.id.slice(0,8) : 'none';
+  const cookie = req.headers['cookie'] ? 'present' : 'MISSING';
+  appLog('warn', 'auth', `Auth failed: ${req.method} ${req.path} — session=${sid} cookie=${cookie}`);
   if (req.path.startsWith('/api/')) {
     return res.status(401).json({ error: 'Not authenticated', path: req.path });
   }
