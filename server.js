@@ -1,7 +1,6 @@
 require('dotenv').config();
 const express  = require('express');
 const session      = require('express-session');
-const MySQLStore   = require('express-mysql-session')(session);
 const bcrypt       = require('bcryptjs');
 const crypto   = require('crypto');
 const cors     = require('cors');
@@ -17,15 +16,20 @@ const os       = require('os');
 const PORT           = parseInt(process.env.PORT || '3001', 10);
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 const SESSION_MAX_AGE= parseInt(process.env.SESSION_MAX_AGE || (8 * 3600 * 1000)); // 8 hours
-const DEVICES_FILE = path.join(__dirname, 'devices.json');
-const TOPO_FILE    = path.join(__dirname, 'topology.json');
-const SCAN_FILE    = path.join(__dirname, 'scan-config.json');
-const APP_LOG_FILE = path.join(__dirname, 'app.log');
-const MAX_LOG_LINES = 5000;  // cap in-memory app log
-const BACKUPS_DIR  = path.join(__dirname, 'backups');
-const HIDDEN_FILE  = path.join(__dirname, 'hidden-interfaces.json');
-const EXPORT_DIR   = path.join(__dirname, 'exports');
-const EXPORT_SCHEDULE_FILE = path.join(__dirname, 'export-schedule.json');
+// Data directory — use env var if set (production install), otherwise
+// fall back to __dirname (development / direct run)
+const DATA_DIR     = process.env.DATA_DIR     || __dirname;
+const LOG_DIR      = process.env.LOG_DIR      || __dirname;
+
+const DEVICES_FILE          = path.join(DATA_DIR, 'devices.json');
+const TOPO_FILE             = path.join(DATA_DIR, 'topology.json');
+const SCAN_FILE             = path.join(DATA_DIR, 'scan-config.json');
+const HIDDEN_FILE           = path.join(DATA_DIR, 'hidden-interfaces.json');
+const EXPORT_SCHEDULE_FILE  = path.join(DATA_DIR, 'export-schedule.json');
+const BACKUPS_DIR           = path.join(DATA_DIR, 'backups');
+const EXPORT_DIR            = path.join(DATA_DIR, 'exports');
+const APP_LOG_FILE          = path.join(LOG_DIR,  'app.log');
+const MAX_LOG_LINES = 5000;
 
 // ─── SNMP OIDs (IF-MIB / RFC 2863) ───────────────────────────────────────────
 const OID = {
@@ -302,7 +306,7 @@ let devices = [];
 function loadDevices() {
   if (!fs.existsSync(DEVICES_FILE)) {
     // Migrate from legacy switches.json if present
-    const legacy = path.join(__dirname, 'switches.json');
+    const legacy = path.join(DATA_DIR, 'switches.json');
     if (fs.existsSync(legacy)) {
       try {
         devices = JSON.parse(fs.readFileSync(legacy, 'utf8'))
@@ -928,22 +932,65 @@ const SECURE_COOKIES = process.env.NODE_ENV === 'production';
 // Using MySQL so sessions survive service restarts
 let sessionStore = null;
 
+// Custom MySQL session store using mysql2 (no extra dependency)
 function createSessionStore(pool) {
-  const options = {
-    clearExpired:         true,
-    checkExpirationInterval: 15 * 60 * 1000,  // check every 15 min
-    expiration:           SESSION_MAX_AGE,
-    createDatabaseTable:  true,
-    schema: {
-      tableName:         'sessions',
-      columnNames: {
-        session_id:      'session_id',
-        expires:         'expires',
-        data:            'data',
-      },
-    },
-  };
-  return new MySQLStore(options, pool);
+  const Store = session.Store;
+
+  class MySQLSessionStore extends Store {
+    constructor() {
+      super();
+      // Purge expired sessions every 15 minutes
+      setInterval(() => this.clearExpired(), 15 * 60 * 1000);
+    }
+
+    async clearExpired() {
+      try {
+        await pool.execute('DELETE FROM sessions WHERE expires < NOW()');
+      } catch(e) { /* ignore */ }
+    }
+
+    get(sid, cb) {
+      pool.execute('SELECT data FROM sessions WHERE session_id = ? AND expires > NOW()', [sid])
+        .then(([rows]) => {
+          if (!rows.length) return cb(null, null);
+          try { cb(null, JSON.parse(rows[0].data)); }
+          catch(e) { cb(null, null); }
+        })
+        .catch(e => cb(e));
+    }
+
+    set(sid, sessionData, cb) {
+      // Format as MySQL DATETIME string: 'YYYY-MM-DD HH:MM:SS'
+      const expiresMs = (sessionData?.cookie?.expires)
+        ? new Date(sessionData.cookie.expires).getTime()
+        : Date.now() + SESSION_MAX_AGE;
+      const expires = new Date(expiresMs).toISOString().slice(0, 19).replace('T', ' ');
+      const data    = JSON.stringify(sessionData);
+      pool.execute(
+        `INSERT INTO sessions (session_id, expires, data) VALUES (?,?,?)
+         ON DUPLICATE KEY UPDATE expires=VALUES(expires), data=VALUES(data)`,
+        [sid, expires, data]
+      ).then(() => cb(null)).catch(e => cb(e));
+    }
+
+    destroy(sid, cb) {
+      pool.execute('DELETE FROM sessions WHERE session_id = ?', [sid])
+        .then(() => cb(null)).catch(e => cb(e));
+    }
+
+    touch(sid, sessionData, cb) {
+      const expiresMs = (sessionData?.cookie?.expires)
+        ? new Date(sessionData.cookie.expires).getTime()
+        : Date.now() + SESSION_MAX_AGE;
+      const expires = new Date(expiresMs).toISOString().slice(0, 19).replace('T', ' ');
+      pool.execute(
+        'UPDATE sessions SET expires = ? WHERE session_id = ?',
+        [expires, sid]
+      ).then(() => cb(null)).catch(e => cb(e));
+    }
+  }
+
+  return new MySQLSessionStore();
 }
 
 // Session middleware — store is attached after DB init
@@ -4812,7 +4859,7 @@ app.post('/api/scan/run', async (req, res) => {
 // CONFIG BACKUPS — scheduled + on-demand, 30-day retention
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const BACKUP_SCHEDULE_FILE = path.join(__dirname, 'backup-schedule.json');
+const BACKUP_SCHEDULE_FILE = path.join(DATA_DIR, 'backup-schedule.json');
 const BACKUP_DEFAULTS = { enabled:false, intervalHours:24, lastBackup:null };
 
 function loadBackupSchedule() {
