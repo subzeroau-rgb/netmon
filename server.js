@@ -947,12 +947,25 @@ function makeMySQLStore(db) {
   require('util').inherits(MySQLStore, Store);
 
   MySQLStore.prototype.get = function(sid, cb) {
-    db.execute('SELECT data FROM sessions WHERE session_id=? AND expires>NOW()', [sid])
+    db.execute('SELECT data, expires FROM sessions WHERE session_id=?', [sid])
       .then(function([rows]) {
-        if (!rows || !rows.length) return cb(null, null);
-        try { cb(null, JSON.parse(rows[0].data)); } catch(e) { cb(null, null); }
+        if (!rows || !rows.length) {
+          appLog('debug','auth','session.get: sid='+sid.slice(0,8)+' NOT FOUND in DB');
+          return cb(null, null);
+        }
+        var row = rows[0];
+        var now = new Date();
+        if (new Date(row.expires) < now) {
+          appLog('debug','auth','session.get: sid='+sid.slice(0,8)+' EXPIRED at '+row.expires);
+          return cb(null, null);
+        }
+        appLog('debug','auth','session.get: sid='+sid.slice(0,8)+' FOUND expires='+row.expires);
+        try { cb(null, JSON.parse(row.data)); } catch(e) { cb(null, null); }
       })
-      .catch(function(e) { cb(e); });
+      .catch(function(e) {
+        appLog('warn','auth','session.get error: '+e.message);
+        cb(e);
+      });
   };
 
   MySQLStore.prototype.set = function(sid, data, cb) {
@@ -961,7 +974,13 @@ function makeMySQLStore(db) {
       'INSERT INTO sessions (session_id, expires, data) VALUES (?,?,?) ' +
       'ON DUPLICATE KEY UPDATE expires=VALUES(expires), data=VALUES(data)',
       [sid, exp, JSON.stringify(data)]
-    ).then(function() { cb(null); }).catch(function(e) { cb(e); });
+    ).then(function() {
+        appLog('debug','auth','session.set: sid='+sid.slice(0,8)+' exp='+exp);
+        cb(null);
+      }).catch(function(e) {
+        appLog('warn','auth','session.set error: '+e.message);
+        cb(e);
+      });
   };
 
   MySQLStore.prototype.destroy = function(sid, cb) {
@@ -1137,18 +1156,18 @@ app.post('/api/auth/login', async (req, res) => {
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
     // Regenerate session to prevent fixation
-    req.session.regenerate((err) => {
-      if (err) return res.status(500).json({ error: 'Session error' });
-      req.session.userId   = user.id;
+    req.session.userId   = user.id;
       req.session.username = user.username;
       req.session.role     = user.role;
       req.session.save((saveErr) => {
-        if (saveErr) return res.status(500).json({ error: 'Session save failed: ' + saveErr.message });
+        if (saveErr) {
+          appLog('warn', 'auth', `Session save failed for ${username}: ${saveErr.message}`);
+          return res.status(500).json({ error: 'Session save failed: ' + saveErr.message });
+        }
         db.execute('UPDATE users SET last_login = NOW() WHERE id = ?', [user.id]);
-        appLog('info', 'auth', `Login: ${username} (${user.role}) secure=${SECURE_COOKIES}`);
+        appLog('info', 'auth', `Login: ${username} (${user.role}) sid=${req.session.id} secure=${SECURE_COOKIES}`);
         res.json({ ok: true, username: user.username, role: user.role });
-      });
-    });
+      });;
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
