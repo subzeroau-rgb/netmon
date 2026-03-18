@@ -927,7 +927,7 @@ app.use(session({
   cookie: {
     httpOnly: true,
     maxAge:   SESSION_MAX_AGE,
-    sameSite: 'strict',
+    sameSite: 'lax',    // 'strict' breaks cookie after login redirect
     secure:   SECURE_COOKIES,
     path:     '/',
   },
@@ -1010,6 +1010,7 @@ async function doLogin(e) {
   try {
     const res = await fetch('/api/auth/login', {
       method:'POST', headers:{'Content-Type':'application/json'},
+      credentials: 'include',
       body: JSON.stringify({ username: document.getElementById('user').value,
                              password: document.getElementById('pass').value })
     });
@@ -4460,6 +4461,23 @@ function scheduleCveCheck() {
   cveCheckTimer = setInterval(runCveCheck, ms);
   appLog('info', 'cve', `CVE check scheduled every ${cfg.intervalHours}h`);
 }
+
+
+// GET /api/debug/session — shows session and cookie state (remove after debugging)
+app.get('/api/debug/session', (req, res) => {
+  res.json({
+    sessionId:    req.session?.id || null,
+    userId:       req.session?.userId || null,
+    username:     req.session?.username || null,
+    nodeEnv:      process.env.NODE_ENV,
+    secureCookies:SECURE_COOKIES,
+    cookieHeader: req.headers['cookie'] || '(none)',
+    protocol:     req.protocol,
+    secure:       req.secure,
+    xfproto:      req.headers['x-forwarded-proto'] || '(none)',
+    xffor:        req.headers['x-forwarded-for'] || '(none)',
+  });
+});
 
 // ── Topology ──────────────────────────────────────────────────────────────────
 
