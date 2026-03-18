@@ -1,7 +1,8 @@
 require('dotenv').config();
 const express  = require('express');
-const session  = require('express-session');
-const bcrypt   = require('bcryptjs');
+const session      = require('express-session');
+const MySQLStore   = require('express-mysql-session')(session);
+const bcrypt       = require('bcryptjs');
 const crypto   = require('crypto');
 const cors     = require('cors');
 const https    = require('https');
@@ -230,6 +231,11 @@ async function initDB() {
     ) ENGINE=InnoDB
   `);
   console.log('[db] auth tables ready');
+
+  // Switch session middleware to MySQL-backed store now that DB is ready
+  sessionStore = createSessionStore(db);
+  sessionMiddleware = buildSessionMiddleware(sessionStore);
+  console.log('[db] MySQL session store ready — sessions will survive restarts');
 
   // Create default admin if no users exist
   const [[userCount]] = await db.execute('SELECT COUNT(*) AS n FROM users');
@@ -918,20 +924,57 @@ app.set('trust proxy', 1);
 // false = allow HTTP (for direct local access without proxy)
 const SECURE_COOKIES = process.env.NODE_ENV === 'production';
 
-app.use(session({
+// Session store — created after DB is ready (see initDB)
+// Using MySQL so sessions survive service restarts
+let sessionStore = null;
+
+function createSessionStore(pool) {
+  const options = {
+    clearExpired:         true,
+    checkExpirationInterval: 15 * 60 * 1000,  // check every 15 min
+    expiration:           SESSION_MAX_AGE,
+    createDatabaseTable:  true,
+    schema: {
+      tableName:         'sessions',
+      columnNames: {
+        session_id:      'session_id',
+        expires:         'expires',
+        data:            'data',
+      },
+    },
+  };
+  return new MySQLStore(options, pool);
+}
+
+// Session middleware — store is attached after DB init
+// express-session handles the case where store is set after middleware registration
+function buildSessionMiddleware(store) {
+  return session({
+    secret:            SESSION_SECRET,
+    resave:            false,
+    saveUninitialized: false,
+    rolling:           true,
+    store:             store,
+    name:              'netmon.sid',
+    cookie: {
+      httpOnly: true,
+      maxAge:   SESSION_MAX_AGE,
+      sameSite: 'lax',
+      secure:   SECURE_COOKIES,
+      path:     '/',
+    },
+  });
+}
+
+// Placeholder — replaced with MySQL-backed session after DB init
+let sessionMiddleware = session({
   secret:            SESSION_SECRET,
-  resave:            true,   // required for rolling sessions with MemoryStore
+  resave:            false,
   saveUninitialized: false,
-  rolling:           true,
   name:              'netmon.sid',
-  cookie: {
-    httpOnly: true,
-    maxAge:   SESSION_MAX_AGE,
-    sameSite: 'lax',    // 'strict' breaks cookie after login redirect
-    secure:   SECURE_COOKIES,
-    path:     '/',
-  },
-}));
+  cookie: { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax', secure: SECURE_COOKIES, path: '/' },
+});
+app.use((req, res, next) => sessionMiddleware(req, res, next));
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 const PUBLIC_PATHS = ['/', '/login', '/api/auth/login', '/api/auth/setup-status'];
