@@ -920,7 +920,7 @@ const SECURE_COOKIES = process.env.NODE_ENV === 'production';
 
 app.use(session({
   secret:            SESSION_SECRET,
-  resave:            false,
+  resave:            true,   // required for rolling sessions with MemoryStore
   saveUninitialized: false,
   rolling:           true,
   name:              'netmon.sid',

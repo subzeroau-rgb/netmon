@@ -904,7 +904,14 @@ tbody tr.click:hover td{background:var(--faint);}
   <div class="card">
     <div class="sec-title">Backend connection</div>
     <div class="fgrid">
-      <div class="field"><label>Backend URL</label><input type="text" id="api-url" value=""></div>
+      <div class="field">
+        <label>Backend URL</label>
+        <input type="text" id="api-url" placeholder="auto (uses current page origin)">
+        <div style="font-size:11px;color:var(--muted);margin-top:3px;">
+          Leave blank to use the current origin automatically. Only change this if the backend is on a different host or port.
+          Current: <span id="api-url-current" style="font-family:var(--mono);"></span>
+        </div>
+      </div>
       <div class="field"><label>UI refresh interval (sec)</label><input type="number" id="ui-interval" value="10" min="5"></div>
     </div>
     <div class="btn-row">
@@ -1123,6 +1130,19 @@ tbody tr.click:hover td{background:var(--faint);}
 <script>
 // ── State ──────────────────────────────────────────────────────────────────────
 let API         = window.location.origin;  // auto-detect — works for LAN, proxy, or direct access
+
+// Override global fetch to always include session credentials
+// This ensures the session cookie is sent on every API request without
+// needing to add credentials:'include' to every individual fetch call
+const _nativeFetch = window.fetch.bind(window);
+window.fetch = function(url, opts = {}) {
+  // Only inject credentials for requests to our own API
+  const urlStr = typeof url === 'string' ? url : url.url || '';
+  if (urlStr.startsWith(API) || urlStr.startsWith('/api/') || urlStr.startsWith('/login')) {
+    opts = { ...opts, credentials: opts.credentials || 'include' };
+  }
+  return _nativeFetch(url, opts);
+};
 let UI_INTERVAL = 10;
 let liveTimer   = null;
 let devList     = [];
@@ -1167,7 +1187,12 @@ function switchTab(name,el) {
   if (name==='history')   populateHistIface();
   if (name==='topology')  initTopoTab();
   if (name==='scan')       { initScanTab(); initMtScanTab(); }
-  if (name==='settings')  { loadSystemStatus(); initExportSettings(); loadUserList(); }
+  if (name==='settings')  {
+    loadSystemStatus(); initExportSettings(); loadUserList();
+    // Show current API URL
+    const hint = document.getElementById('api-url-current');
+    if (hint) hint.textContent = API;
+  }
   if (name==='cve')       initCvePage();
   if (name==='backups')    initBackupsTab();
   if (name==='search')      initSearchTab();
@@ -1177,9 +1202,13 @@ function switchTab(name,el) {
 
 // ── Settings ───────────────────────────────────────────────────────────────────
 function applySettings() {
-  API         = (document.getElementById('api-url').value||window.location.origin).replace(/\/$/,'');
-  UI_INTERVAL = Math.max(5,parseInt(document.getElementById('ui-interval').value)||10);
+  const customUrl = document.getElementById('api-url').value.trim().replace(/\/$/, '');
+  API         = customUrl || window.location.origin;
+  UI_INTERVAL = Math.max(5, parseInt(document.getElementById('ui-interval').value) || 10);
   document.getElementById('settings-err').textContent = '';
+  // Update the hint
+  const hint = document.getElementById('api-url-current');
+  if (hint) hint.textContent = API;
   startPolling();
 }
 
@@ -1226,15 +1255,21 @@ function startPolling() {
 
 async function fetchDevices() {
   try {
-    const res = await fetch(`${API}/api/switches`);
-    if (!res.ok) throw new Error('HTTP '+res.status);
+    const res = await fetch(`${API}/api/switches`, { credentials: 'include' });
+    if (res.status === 401) {
+      // Session expired — redirect to login
+      if (!window.location.pathname.startsWith('/login')) window.location = '/login';
+      return;
+    }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
     devList = await res.json();
     populateSelector(devList);
     updateConnPill();
     if (document.getElementById('page-devices').classList.contains('active')) renderDevList();
   } catch(e) {
     document.getElementById('conn-dot').className = 'dot err';
-    document.getElementById('conn-label').textContent = 'Backend unreachable';
+    document.getElementById('conn-label').textContent = 'Backend unreachable — ' + e.message;
+    console.warn('fetchDevices failed:', e.message, 'API:', API);
   }
 }
 
@@ -1242,7 +1277,7 @@ let _hiddenLoaded = false;
 async function fetchLive() {
   if (!activeDevId) return;
   try {
-    const res = await fetch(`${API}/api/live?switch=${activeDevId}`);
+    const res = await fetch(`${API}/api/live?switch=${activeDevId}`, { credentials: 'include' });
     if (!res.ok) throw new Error('HTTP '+res.status);
     livePorts = await res.json();
     // Load hidden interfaces once per device selection, before first render
@@ -3703,6 +3738,8 @@ async function initAuth() {
       if (!window.location.pathname.startsWith('/login')) window.location = '/login';
       return false;
     }
+    // Log the effective API URL to help diagnose connection issues
+    console.info('Network Monitor: API =', API);
     const me = await res.json();
     const el = document.getElementById('nav-username');
     if (el) el.textContent = me.username + (me.role === 'admin' ? ' (admin)' : '');
