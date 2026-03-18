@@ -236,10 +236,7 @@ async function initDB() {
   `);
   console.log('[db] auth tables ready');
 
-  // Switch session middleware to MySQL-backed store now that DB is ready
-  sessionStore = createSessionStore(db);
-  sessionMiddleware = buildSessionMiddleware(sessionStore);
-  console.log('[db] MySQL session store ready — sessions will survive restarts');
+  console.log('[db] MySQL session store ready');
 
   // Create default admin if no users exist
   const [[userCount]] = await db.execute('SELECT COUNT(*) AS n FROM users');
@@ -928,100 +925,66 @@ app.set('trust proxy', 1);
 // false = allow HTTP (for direct local access without proxy)
 const SECURE_COOKIES = process.env.NODE_ENV === 'production';
 
-// Session store — created after DB is ready (see initDB)
-// Using MySQL so sessions survive service restarts
-let sessionStore = null;
+// MySQL session store — dedicated pool, initialised at startup
+// Sessions stored in DB survive service restarts and deploys
 
-// Custom MySQL session store using mysql2 (no extra dependency)
-function createSessionStore(pool) {
-  const Store = session.Store;
-
-  class MySQLSessionStore extends Store {
-    constructor() {
-      super();
-      // Purge expired sessions every 15 minutes
-      setInterval(() => this.clearExpired(), 15 * 60 * 1000);
-    }
-
-    async clearExpired() {
-      try {
-        await pool.execute('DELETE FROM sessions WHERE expires < NOW()');
-      } catch(e) { /* ignore */ }
-    }
-
-    get(sid, cb) {
-      pool.execute('SELECT data FROM sessions WHERE session_id = ? AND expires > NOW()', [sid])
-        .then(([rows]) => {
-          if (!rows.length) return cb(null, null);
-          try { cb(null, JSON.parse(rows[0].data)); }
-          catch(e) { cb(null, null); }
-        })
-        .catch(e => cb(e));
-    }
-
-    set(sid, sessionData, cb) {
-      // Format as MySQL DATETIME string: 'YYYY-MM-DD HH:MM:SS'
-      const expiresMs = (sessionData?.cookie?.expires)
-        ? new Date(sessionData.cookie.expires).getTime()
-        : Date.now() + SESSION_MAX_AGE;
-      const expires = new Date(expiresMs).toISOString().slice(0, 19).replace('T', ' ');
-      const data    = JSON.stringify(sessionData);
-      pool.execute(
-        `INSERT INTO sessions (session_id, expires, data) VALUES (?,?,?)
-         ON DUPLICATE KEY UPDATE expires=VALUES(expires), data=VALUES(data)`,
-        [sid, expires, data]
-      ).then(() => cb(null)).catch(e => cb(e));
-    }
-
-    destroy(sid, cb) {
-      pool.execute('DELETE FROM sessions WHERE session_id = ?', [sid])
-        .then(() => cb(null)).catch(e => cb(e));
-    }
-
-    touch(sid, sessionData, cb) {
-      const expiresMs = (sessionData?.cookie?.expires)
-        ? new Date(sessionData.cookie.expires).getTime()
-        : Date.now() + SESSION_MAX_AGE;
-      const expires = new Date(expiresMs).toISOString().slice(0, 19).replace('T', ' ');
-      pool.execute(
-        'UPDATE sessions SET expires = ? WHERE session_id = ?',
-        [expires, sid]
-      ).then(() => cb(null)).catch(e => cb(e));
-    }
+const _SessionStore = session.Store;
+class MySQLSessionStore extends _SessionStore {
+  constructor() {
+    super();
+    setInterval(() => this._clearExpired(), 15 * 60 * 1000);
   }
-
-  return new MySQLSessionStore();
+  _fmt(ms) { return new Date(ms).toISOString().slice(0,19).replace('T',' '); }
+  _clearExpired() {
+    pool.execute('DELETE FROM sessions WHERE expires < NOW()').catch(()=>{});
+  }
+  get(sid, cb) {
+    pool.execute(
+      'SELECT data FROM sessions WHERE session_id=? AND expires>NOW()', [sid]
+    ).then(([rows]) => {
+      if (!rows.length) return cb(null, null);
+      try { cb(null, JSON.parse(rows[0].data)); } catch(e) { cb(null, null); }
+    }).catch(e => cb(e));
+  }
+  set(sid, data, cb) {
+    const exp = this._fmt(
+      data?.cookie?.expires ? new Date(data.cookie.expires).getTime() : Date.now() + SESSION_MAX_AGE
+    );
+    pool.execute(
+      `INSERT INTO sessions (session_id, expires, data) VALUES (?,?,?)
+       ON DUPLICATE KEY UPDATE expires=VALUES(expires), data=VALUES(data)`,
+      [sid, exp, JSON.stringify(data)]
+    ).then(() => cb(null)).catch(e => cb(e));
+  }
+  destroy(sid, cb) {
+    pool.execute('DELETE FROM sessions WHERE session_id=?', [sid])
+      .then(() => cb(null)).catch(e => cb(e));
+  }
+  touch(sid, data, cb) {
+    const exp = this._fmt(
+      data?.cookie?.expires ? new Date(data.cookie.expires).getTime() : Date.now() + SESSION_MAX_AGE
+    );
+    pool.execute(
+      'UPDATE sessions SET expires=? WHERE session_id=?', [exp, sid]
+    ).then(() => cb(null)).catch(e => cb(e));
+  }
 }
 
-// Session middleware — store is attached after DB init
-// express-session handles the case where store is set after middleware registration
-function buildSessionMiddleware(store) {
-  return session({
-    secret:            SESSION_SECRET,
-    resave:            false,
-    saveUninitialized: false,
-    rolling:           true,
-    store:             store,
-    name:              'netmon.sid',
-    cookie: {
-      httpOnly: true,
-      maxAge:   SESSION_MAX_AGE,
-      sameSite: 'lax',
-      secure:   SECURE_COOKIES,
-      path:     '/',
-    },
-  });
-}
-
-// Placeholder — replaced with MySQL-backed session after DB init
-let sessionMiddleware = session({
+app.use(session({
   secret:            SESSION_SECRET,
   resave:            false,
   saveUninitialized: false,
+  rolling:           true,
+  store:             new MySQLSessionStore(),
   name:              'netmon.sid',
-  cookie: { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax', secure: SECURE_COOKIES, path: '/' },
-});
-app.use((req, res, next) => sessionMiddleware(req, res, next));
+  cookie: {
+    httpOnly: true,
+    maxAge:   SESSION_MAX_AGE,
+    sameSite: 'lax',
+    secure:   SECURE_COOKIES,
+    path:     '/',
+  },
+}));
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 const PUBLIC_PATHS = ['/', '/login', '/api/auth/login', '/api/auth/setup-status'];
