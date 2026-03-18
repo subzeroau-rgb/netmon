@@ -144,6 +144,7 @@ async function initDB() {
     waitForConnections: true,
     connectionLimit:    10,
     namedPlaceholders:  true,
+    timezone:           '+00:00',  // always interpret DATETIME as UTC
   });
   console.log('[db] MySQL pool ready');
   // Ensure device_info table exists (auto-migrate)
